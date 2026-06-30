@@ -102,7 +102,7 @@ A pure vector search can't tell "I bought a coat three years ago" (event) from "
 1. **Append-only, never mutate** — history is immutable
 2. **Separate by responsibility, retrieve on demand** — don't overload one dimension
 3. **Event vs state, explicit strategy** — each axis knows why it exists
-4. **Local-first, API-enhanced** — runs on filesystem alone
+4. **Local-first, API-enhanced** — agent persists memory directly to JSONL files, no separate storage service required
 5. **Auto-sediment, grow organically** — knowledge grows from conversation naturally
 
 ---
@@ -254,7 +254,7 @@ Readable entries (Wiki Vault)
 | **Raw dialogue** | ✅ Session (event-driven) | ❌ Compressed loses info | ✅ Unstructured | ❌ | ✅ Unstructured |
 | **Semantic search** | ⚠️ Optional enhancement | ❌ | ✅ Core ability | ❌ | ❌ |
 | **Readable knowledge** | ✅ Wiki auto-sediment | ❌ | ❌ | ❌ | ❌ |
-| **Deploy complexity** | 🟢 **Minimal — filesystem** | 🟡 Medium | 🟡 Medium | 🔴 High | 🟢 Minimal |
+| **Deploy complexity** | 🟢 **Low — single script** | 🟡 Medium | 🟡 Medium | 🔴 High | 🟢 Low |
 | **Memory strategy** | 🎯 **Dual: event + state** | ❌ Single | ❌ Single | ❌ Single | ❌ Single |
 | **Single user** | ✅ Naturally fits | ✅ Works | ⚠️ Overkill | ❌ Way too heavy | ✅ But low recall |
 | **Cross-axis query** | ✅ Automatic | ❌ | ❌ | ✅ Manual relations | ❌ |
@@ -265,7 +265,7 @@ Readable entries (Wiki Vault)
 
 2. **Three-layer knowledge sedimentation pipeline.** Raw data → vector search → readable wiki, automatically. No manual curating required.
 
-3. **Minimal infrastructure.** Runs on a filesystem. No database, no container, no external service needed. Optional LLM/embedding for enhanced features.
+3. **Agent-native, no extra infrastructure.** Four axes is designed to run inside an AI agent runtime — no separate database server, no container orchestration, no microservices. The agent reads and writes JSONL directly as part of its reply loop. A single python script handles all axis operations. Optional LLM/embedding for enhanced features.
 
 4. **Designed for "memory" in the human sense.** Not a generic knowledge management tool — it's built for the relationship between a user and their AI. Timeline feel, state consistency, dialogue recall are core requirements, not afterthoughts.
 
@@ -281,7 +281,7 @@ Readable entries (Wiki Vault)
 |---|---|---|---|---|---|
 | Core mechanism | File + optional vector | Recursive summarization | Vector + graph | Agentic loop | Vector + LLM reasoning |
 | Self-hostable | ✅ Full | ❌ Cloud-reliant | ✅ Self + Cloud | ❌ Cloud | ✅ Self + Cloud |
-| Data format | Plain JSONL | Proprietary | Proprietary | Proprietary | Proprietary |
+| Data format | JSONL | Proprietary | Proprietary | Proprietary | Proprietary |
 | Axis separation | ✅ Explicit (4) | ❌ Single timeline | ⚠️ Core+user | ❌ | ❌ |
 | Pair-of-AI design | ✅ Built for | ❌ | ❌ | ❌ | ❌ |
 | Persistence strategy | Event vs state dual | Single (all summary) | Single (vector) | Single | Single |
