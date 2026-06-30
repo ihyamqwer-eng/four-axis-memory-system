@@ -1,0 +1,2 @@
+{"ts": "2026-06-20T01:19:04+08:00", "event": "task_created", "name": "doc_design_v2", "state": "in_progress", "detail": "Adding three-layer architecture"}
+{"ts": "2026-06-21T15:00:00+08:00", "event": "state_changed", "name": "doc_design_v2", "state": "completed", "detail": "All design docs and architecture complete"}
