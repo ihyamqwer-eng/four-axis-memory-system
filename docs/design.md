@@ -17,14 +17,44 @@ Problems with existing memory systems:
 | Graph DB      | Heavy extraction overhead, overkill for personal use |
 | Flat logs     | Low retrieval efficiency, hard to find "that thing from before" |
 
-Four axes separate memory by **purpose**, not by format:
+Four axes separate memory by **purpose** and **persistence strategy**, not by format:
 
-| Axis      | Purpose                      | Human analogy                    |
-|-----------|------------------------------|----------------------------------|
-| Timeline  | Time index, "what happened"  | "What happened that day"         |
-| God Agent | Live state, "who I am"       | "What I'm wearing, how I feel"   |
-| Object    | Task/project tracking        | "How's that project going"       |
-| Session   | Raw dialogue archive         | "What exactly did they say"      |
+| Axis      | Driving Property | Persistence Strategy | Purpose | Human Analogy |
+|-----------|-----------------|----------------------|---------|---------------|
+| Timeline  | **Event-Driven** | Append-only, immutable | What happened, in order | "What happened that day" |
+| God Agent | **State-Driven** | Last-write-wins | Current snapshot of who I am | "How I'm feeling right now" |
+| Object    | **State-Driven** | Append changelog | Task/project tracking | "How's that project going" |
+| Session   | **Event-Driven** | Append-only, immutable | Raw dialogue archive | "What exactly did they say" |
+
+## Event-Driven vs State-Driven: The Core Distinction
+
+This is the most important design insight in this system.
+
+Most memory systems treat all data the same way: either everything is append-only (infinite growth, hard to query current state), or everything overwrites (lose valuable history). Four axes make this distinction explicit.
+
+### Event-Driven Axes (Timeline + Session)
+
+**Persist what happened, exactly as it happened. Never overwrite, never merge.**
+
+- Every event is an independent, immutable record
+- Ordered by time
+- Used for: recalling the past, answering "what happened when"
+- Examples: "2026-06-13: system first deployed", "2026-06-21: all three layers automated"
+- Concurrency strategy: **append-only**. History is sacred.
+
+### State-Driven Axes (God Agent + Object)
+
+**Persist what is true right now. Old states are replaced, but transitions are recorded.**
+
+- Only the latest snapshot matters for direct query
+- State transitions still leave a trace in changelogs
+- Used for: knowing current mood/location/activity, checking project status
+- Examples: "mood: sleepy → hungry → content" (transition trace), "project: in_progress → completed"
+- Concurrency strategy: **last-write-wins** for God Agent (fast overwrite of current state), **append changelog** for Object (traceable transitions)
+
+### Why This Matters
+
+A pure vector search can't tell "I bought a coat three years ago" (event) from "I just had lunch" (another event) — they're both just vectors. A flat log can't answer "what's the current mood" without scanning all entries. By separating persistence strategies, four axes let "remembering the past" and "querying the present" use different paths, without interfering with each other.
 
 ---
 
@@ -34,20 +64,22 @@ Four axes separate memory by **purpose**, not by format:
 ┌──────────────────────────────────────────────────────────────┐
 │              Layer 1: Four Axes (Raw Data)                    │
 │                                                              │
-│  Timeline · God Agent · Object · Session                     │
-│  (jsonl files, append-only)                                   │
-└──────────────────────────┬───────────────────────────────────┘
-                           │
-                           ▼
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────┐│
+│  │   Timeline   │  │  God Agent   │  │   Object     │  │Sess││
+│  │  append-only │  │ last-write   │  │ changelog    │  │app-││
+│  │  event-driven│  │ state-driven │  │ state-driven │  │only││
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──┬─┘│
+│         │                  │                  │             │   │
+└─────────┼──────────────────┼──────────────────┼─────────────┼───┘
+          │                  │                  │             │
+          ▼                  ▼                  ▼             ▼
 ┌──────────────────────────────────────────────────────────────┐
 │         Layer 2: Semantic Retrieval (LanceDB + Embedding)     │
 │                                                              │
-│  extract-fact → LLM extraction → embedding model → LanceDB  │
-│  memory_recall.py → cross-axis semantic search                │
+│  extract-fact → LLM extraction → embedding → LanceDB        │
+│  Cross-axis semantic search via memory_recall.py             │
 │                                                              │
-│  What plain text search can't do:                            │
-│  "happy" matches "feeling great today"                        │
-│  cross-axis join is automatic                                 │
+│  Solves: "I remember something about X, but not which axis"  │
 └──────────────────────────┬───────────────────────────────────┘
                            │
                            ▼
@@ -59,24 +91,27 @@ Four axes separate memory by **purpose**, not by format:
 │  entities/   → entity profiles (tools, people, config items)  │
 │  sources/    → fact provenance tracking                       │
 │                                                              │
-│  auto lint · auto provenance · wiki native support           │
+│  Auto sediment: facts with importance ≥ 4 auto-create pages  │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+---
 
 ## Design Principles
 
 1. **Append-only, never mutate** — history is immutable
 2. **Separate by responsibility, retrieve on demand** — don't overload one dimension
-3. **Local-first, API-enhanced** — runs on filesystem alone
-4. **Auto-sediment, grow organically** — knowledge grows from conversation naturally
+3. **Event vs state, explicit strategy** — each axis knows why it exists
+4. **Local-first, API-enhanced** — runs on filesystem alone
+5. **Auto-sediment, grow organically** — knowledge grows from conversation naturally
 
 ---
 
 ## Axis Specifications
 
-### Timeline (`timeline.jsonl`)
+### Timeline (`timeline.jsonl`) — Event-Driven
 
-Temporal event index. One entry per event.
+Temporal event index. One entry per event. Append-only.
 
 ```json
 {"ts": "2026-06-21T22:54:45+08:00", "event": "System Upgrade", "level": "milestone", "summary": "All three layers automated"}
@@ -88,9 +123,9 @@ Fields:
 - `level`: daily | important | milestone
 - `summary`: event description
 
-### God Agent (`god/{agent}.jsonl`)
+### God Agent (`god/{agent}.jsonl`) — State-Driven
 
-Live state snapshot chain. Appends a full snapshot on each state change.
+Live state snapshot chain. Last-write-wins. Only the latest entry is the current state.
 
 ```json
 {"ts": "2026-06-22T09:21:19+08:00", "type": "state_update", "state": {"mood": "sleepy", "location": "home", "activity": "coding"}}
@@ -98,19 +133,19 @@ Live state snapshot chain. Appends a full snapshot on each state change.
 
 Concurrency: **last-write-wins**. Single-user, no collisions.
 
-### Session (`session/YYYY-MM-DD-channel/reply-01.jsonl`)
+### Session (`session/YYYY-MM-DD-channel/reply-01.jsonl`) — Event-Driven
 
-Raw dialogue archive, organized by date and channel.
+Raw dialogue archive, organized by date and channel. Append-only. Mandatory write.
 
 ```json
 {"ts": "2026-06-22T09:21:00+08:00", "who": "user", "msg": "Good morning", "channel": "telegram"}
 ```
 
-Highest precision layer. Used for exact recall. Mandatory write.
+Highest precision layer. Used for exact recall.
 
-### Object (`object/{name}.jsonl`)
+### Object (`object/{name}.jsonl`) — State-Driven
 
-Independent task/role state tracking. Created on task start, archived on completion.
+Independent task/role state tracking. Append changelog — each entry traces a state transition.
 
 ```json
 {"ts": "2026-06-20T01:19:04+08:00", "event": "task_created", "name": "doc_design_v2", "state": "in_progress", "detail": "Adding three-layer architecture"}
@@ -120,15 +155,15 @@ Independent task/role state tracking. Created on task start, archived on complet
 
 ## Update Model
 
-| Axis      | When                  | How                     | Concurrency       |
-|-----------|-----------------------|-------------------------|-------------------|
-| Timeline  | Important event       | `--event "name"`        | Append-only       |
-| God Agent | State change          | `--state '{}'`          | Last-write-wins   |
-| Session   | Every reply (forced)  | `--msg "text"`          | Append-only       |
-| Object    | Task progress         | Manual jsonl write      | Append-only       |
-| Semantic  | Every reply           | `extract-fact` auto     | Upsert            |
-| Static    | Auto scan             | `check-static`          | Append-only       |
-| Wiki      | Important facts       | `extract-fact` auto sync| Append or create  |
+| Axis      | When                  | How                     | Driving       | Concurrency      |
+|-----------|-----------------------|-------------------------|---------------|------------------|
+| Timeline  | Important event       | `--event "name"`        | Event-driven  | Append-only      |
+| God Agent | State change          | `--state '{}'`          | State-driven  | Last-write-wins  |
+| Session   | Every reply (forced)  | `--msg "text"`          | Event-driven  | Append-only      |
+| Object    | Task progress         | Manual jsonl write      | State-driven  | Append changelog |
+| Semantic  | Every reply           | `extract-fact` auto     | —             | Upsert           |
+| Static    | Auto scan             | `check-static`          | —             | Append-only      |
+| Wiki      | Important facts       | `extract-fact` auto sync| —             | Append or create |
 
 ### One Command
 
@@ -140,19 +175,25 @@ python3 autofour_v2.py --mode auto-update \
   --auto-state
 ```
 
+The `auto-update` command evaluates each axis independently:
+- Session: always writes
+- God Agent: writes only if state changed (auto-inferred from dialogue)
+- Timeline: writes only if a significant event occurred
+- Object: writes only if task progress was made
+
 ---
 
 ## Query Model
 
-| Query                              | Path                           |
-|------------------------------------|--------------------------------|
-| "What happened recently?"          | Last N entries in timeline     |
-| "How is she feeling?"              | Last 1 entry in god agent      |
-| "What'd they say that day?"        | Session file for that date     |
-| "How's that project going?"        | Object file for that task      |
-| "I remember something about..."    | Semantic search                |
-| "What's the system architecture?"  | Wiki concepts                  |
-| "We discussed this knowledge"      | Wiki syntheses                 |
+| Query                              | Path                           | Axis Type   |
+|------------------------------------|--------------------------------|-------------|
+| "What happened recently?"          | Last N entries in timeline     | Event       |
+| "How is she feeling?"              | Last 1 entry in god agent      | State       |
+| "What'd they say that day?"        | Session file for that date     | Event       |
+| "How's that project going?"        | Object file for that task      | State       |
+| "I remember something about..."    | Semantic search (cross-axis)   | Hybrid      |
+| "What's the system architecture?"  | Wiki concepts                  | Knowledge   |
+| "We discussed this knowledge"      | Wiki syntheses                 | Knowledge   |
 
 ---
 
@@ -181,18 +222,70 @@ Readable entries (Wiki Vault)
 
 ---
 
+## Application Scenarios
+
+### Best Fit
+
+| Scenario | Fit | Why |
+|----------|-----|-----|
+| **Personal AI assistant / companion** | ⭐⭐⭐⭐⭐ | Remembers preferences, habits, past conversations. "Last time you mentioned..." feels natural |
+| **Long-running chatbot / virtual friend** | ⭐⭐⭐⭐⭐ | Foundation for long-term memory: shared experiences, consistent personality, no repeated questions |
+| **Roleplay / character consistency** | ⭐⭐⭐⭐ | God Agent keeps character state consistent; Object tracks storylines |
+| **Personal knowledge / second brain** | ⭐⭐⭐⭐ | Structured axes + Wiki sedimentation = auto-growing knowledge base |
+| **Lightweight task management** | ⭐⭐⭐⭐ | Object axis naturally adapts to project/progress tracking |
+| **Cross-channel memory** | ⭐⭐⭐ | Multi-channel merge supported, but single-user |
+| **Enterprise / team use** | ⭐⭐ | Single-user architecture, no distributed support |
+
+### Poor Fit
+- High-concurrency read/write
+- Multi-tenant SaaS
+- Strict ACID transaction requirements
+- Teams already invested in vector DB + graph DB + traditional DB (they don't need another abstraction layer)
+
+---
+
 ## Comparison
 
-|                   | Four Axes | MemGPT | Pure Vector | Graph DB |
-|-------------------|-----------|--------|-------------|----------|
-| Time awareness    | ✅ Timeline| ✅ rec. summary| ❌      | ❌       |
-| State tracking    | ✅ God    | ❌      | ❌          | ❌       |
-| Project isolation | ✅ Object | ❌      | ❌          | ❌       |
-| Raw dialogue      | ✅ Session| ❌ lost | ✅ (unstructured)| ❌  |
-| Semantic search   | ⚠️ Optional| ❌    | ✅ Core     | ❌       |
-| Readable KB       | ✅ Wiki   | ❌      | ❌          | ❌       |
-| Deploy complexity | Low (FS)  | Medium  | Medium      | High     |
-| Single user       | ✅ Perfect| ✅      | ✅ (heavy)  | ❌ (heavy)|
+| | **Four Axes** | MemGPT | Pure Vector | Graph DB | Flat Log |
+|---|---|---|---|---|---|
+| **Time awareness** | ✅ Timeline (event-driven) | ✅ Recursive summary | ❌ Loses order | ❌ | ❌ Scan all |
+| **State awareness** | ✅ God Agent (state-driven) | ❌ | ❌ Extra design needed | ❌ | ❌ |
+| **Project isolation** | ✅ Object (state-driven) | ❌ | ❌ No grouping | ❌ Too heavy | ❌ |
+| **Raw dialogue** | ✅ Session (event-driven) | ❌ Compressed loses info | ✅ Unstructured | ❌ | ✅ Unstructured |
+| **Semantic search** | ⚠️ Optional enhancement | ❌ | ✅ Core ability | ❌ | ❌ |
+| **Readable knowledge** | ✅ Wiki auto-sediment | ❌ | ❌ | ❌ | ❌ |
+| **Deploy complexity** | 🟢 **Minimal — filesystem** | 🟡 Medium | 🟡 Medium | 🔴 High | 🟢 Minimal |
+| **Memory strategy** | 🎯 **Dual: event + state** | ❌ Single | ❌ Single | ❌ Single | ❌ Single |
+| **Single user** | ✅ Naturally fits | ✅ Works | ⚠️ Overkill | ❌ Way too heavy | ✅ But low recall |
+| **Cross-axis query** | ✅ Automatic | ❌ | ❌ | ✅ Manual relations | ❌ |
+
+### Key Advantages
+
+1. **Dual persistence strategy (event-driven + state-driven).** Most systems are either all-append (infinite growth) or all-overwrite (loss of history). Four axes let each data type use its natural strategy.
+
+2. **Three-layer knowledge sedimentation pipeline.** Raw data → vector search → readable wiki, automatically. No manual curating required.
+
+3. **Minimal infrastructure.** Runs on a filesystem. No database, no container, no external service needed. Optional LLM/embedding for enhanced features.
+
+4. **Designed for "memory" in the human sense.** Not a generic knowledge management tool — it's built for the relationship between a user and their AI. Timeline feel, state consistency, dialogue recall are core requirements, not afterthoughts.
+
+5. **One command writes all axes.** `auto-update` evaluates each axis independently and writes only what changed. No manual decisions needed.
+
+6. **Immutability where it matters.** Event-driven data is never modified — history is preserved exactly as it happened.
+
+---
+
+## Comparison with Other "Memory for AI" Systems
+
+| | **Four Axes** | MemGPT | Mem0 | Letta | Zep |
+|---|---|---|---|---|---|
+| Core mechanism | File + optional vector | Recursive summarization | Vector + graph | Agentic loop | Vector + LLM reasoning |
+| Self-hostable | ✅ Full | ❌ Cloud-reliant | ✅ Self + Cloud | ❌ Cloud | ✅ Self + Cloud |
+| Data format | Plain JSONL | Proprietary | Proprietary | Proprietary | Proprietary |
+| Axis separation | ✅ Explicit (4) | ❌ Single timeline | ⚠️ Core+user | ❌ | ❌ |
+| Pair-of-AI design | ✅ Built for | ❌ | ❌ | ❌ | ❌ |
+| Persistence strategy | Event vs state dual | Single (all summary) | Single (vector) | Single | Single |
+| Deploy | Just a script | Docker | Python SDK | Docker | Docker + services |
 
 ---
 
@@ -203,6 +296,7 @@ Readable entries (Wiki Vault)
 - Semantic retrieval and state inference depend on external LLM/embedding models
 - No distributed/multi-tenant support
 - Wiki writes are trigger-based (extract-fact), not real-time streaming
+- No API for consumer applications (it's an agent-level system, not a service)
 
 ---
 
